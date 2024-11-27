@@ -324,8 +324,8 @@ class LSTMModel:
 if __name__ == '__main__':
 
     # Uso do modelo
-    # modelo = LSTMModel("AAPL", '2023-01-01', '2024-11-13')
-    # modelo.create_model()
+    modelo = LSTMModel("AAPL", '2023-01-01', '2024-11-13')
+    modelo.create_model()
 
     predictions = LSTMModel.predict(
         ticker="AAPL",
