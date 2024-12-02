@@ -4,7 +4,7 @@ Este repositório implementa um sistema completo para previsão de preços de a�
 
 ## Estrutura do Projeto
 
-```
+```bash
 projeto-previsao-acoes/
 ├── lstm/               # Módulo principal para treinamento e previsão de preços de ações.
 │   ├── __init__.py     # Inicialização do pacote LSTM.
