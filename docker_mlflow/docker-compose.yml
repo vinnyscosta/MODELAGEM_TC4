@@ -1,0 +1,15 @@
+version: '3.8'
+
+services:
+  mlflow:
+    build:
+      context: .
+    container_name: mlflow-ui
+    ports:
+      - "5000:5000"
+    volumes:
+      # Volume para persistir os artefatos do MLflow
+      - ./mlruns:/app/mlruns
+      # Volume para persistir o banco de dados SQLite
+      - ./mlflow.db:/app/mlflow.db
+    restart: unless-stopped

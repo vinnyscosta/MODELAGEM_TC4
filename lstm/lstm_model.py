@@ -4,11 +4,13 @@ import numpy as np
 import pandas as pd
 import tensorflow as tf
 import joblib
-from logger_config import get_logger
+import mlflow
+import mlflow.keras
+from .logger_config import get_logger
 from pathlib import Path
 from datetime import datetime, timedelta
 from sklearn.preprocessing import MinMaxScaler
-from tensorflow.keras.models import Sequential, load_model  # type: ignore
+from tensorflow.keras.models import Sequential  # type: ignore
 from tensorflow.keras.optimizers import Adam  # type: ignore
 from tensorflow.keras.callbacks import EarlyStopping  # type: ignore
 from tensorflow.keras.metrics import MeanSquaredError  # type: ignore
@@ -32,8 +34,11 @@ def mse(y_true, y_pred):
 
 
 class LSTMModel:
-    """Realiza o treinamento de um novo modelo LSTM para ações.
+    """Realiza o treinamento de um novo modelo LSTM para ações e
+        permite predições a partir deles.
     """
+
+    mlflow.set_tracking_uri("http://localhost:5000")
 
     def __init__(self, ticker: str, start_date: str, end_date: str) -> None:
         """Instancia o Objeto
@@ -43,6 +48,9 @@ class LSTMModel:
             start_date (str): Data de inicio para a busca de dados
             end_date (str): Data fim para a busca de dados
         """
+
+        mlflow.set_experiment(f"LSTM_{ticker}")
+
         self.ticker = ticker
         self.start_date_str = start_date
         self.end_date_str = end_date
@@ -103,7 +111,8 @@ class LSTMModel:
         """Divide os dados entre indice (dates), features (X) and target (Y)."
 
         Args:
-            windowed_df (pd.DataFrame): Dataframe com janela de dados anteriores.
+            windowed_df (pd.DataFrame): Dataframe com janela de
+                dados anteriores.
 
         Returns:
             tuple: _description_tuble contendo:
@@ -175,6 +184,9 @@ class LSTMModel:
             metrics=['mean_absolute_error']
         )
 
+        # Auto-logging do MlFlow
+        mlflow.tensorflow.autolog()
+
         # Treinamento
         self.history = self.model.fit(
             self.X_train,
@@ -201,17 +213,29 @@ class LSTMModel:
         self.mape = np.mean(
             np.abs((y_predictions - predictions) / y_predictions)
         ) * 100
+        self.drift = np.abs(np.mean(y_predictions) - np.mean(predictions))
+        self.error_variance = np.var(np.abs(y_predictions - predictions))
+
+        # Log manual das métricas no MLflow
+        mlflow.log_metric("MAE", self.mae)
+        mlflow.log_metric("MSE", self.mse)
+        mlflow.log_metric("RMSE", self.rmse)
+        mlflow.log_metric("MAPE", self.mape)
+        mlflow.log_metric("Drift", self.drift)
+        mlflow.log_metric("Error Variance", self.error_variance)
 
         logger.info(f"Mean Absolute Error: {self.mae}")
         logger.info(f"Mean Squared Error: {self.mse}")
         logger.info(f"Root Mean Squared Error: {self.rmse}")
         logger.info(f"Mean Absolute Percentage Error: {self.mape}%")
+        logger.info(f"Drift: {self.drift}")
+        logger.info(f"Error Variance: {self.error_variance}")
 
     def save(self) -> None:
         """Salva o modelo treinado e o scaler utilizado.
         """
         self.folder = datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
-        path = Path(f"./{self.ticker}/{self.folder}")
+        path = Path(f"./models/{self.ticker}/{self.folder}")
         path.mkdir(parents=True, exist_ok=True)
         path.chmod(0o777)
 
@@ -222,73 +246,137 @@ class LSTMModel:
         self.model.save(model_filename)
         joblib.dump(self.scaler, scaler_filename)
 
+        mlflow.log_artifact(model_filename)
+        mlflow.log_artifact(scaler_filename)
+
     def create_model(self) -> None:
         """Cria e treina o modelo LSTM.
         """
-        self.load_data()
-        self.normalize_data()
-        self.train_val_test_split()
-        self.train_model()
-        self.evaluate_model()
-        self.save()
+        time = datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
+        with mlflow.start_run(run_name=time):
+            self.load_data()
+            self.normalize_data()
+            self.train_val_test_split()
+            self.train_model()
+            self.evaluate_model()
+            self.save()
 
-    @classmethod
-    def predict(
-        cls,
-        ticker: str,
-        model_folder: str,
-        days_ahead: list[int],
-        recent_data: list
-    ) -> dict:
-        # Identificar o arquivo do modelo e do scaler
+    @staticmethod
+    def get_model_and_scaler(ticker: str = "AAPL"):
+        """
+        Retorna o modelo treinado e o scaler para um determinado ticker.
 
-        path = Path(os.path.join(ticker, model_folder))
-        model_file = next(path.glob("*.keras"))
-        scaler_file = next(path.glob("*.pkl"))
+        Args:
+            ticker (str, optional):
+                Símbolo da ação para a qual o modelo e o scaler
+                    devem ser carregados. O padrão é "AAPL".
 
-        if not model_file.exists() or not scaler_file.exists():
-            raise FileNotFoundError(f"Modelo ou scaler não encontrados no caminho {path}")
+        Raises:
+            ValueError:
+                Levantado se o experimento correspondente ao ticker não
+                    for encontrado.
+            FileNotFoundError:
+                Levantado se o arquivo de scaler não estiver presente
+                    nos artefatos.
 
-        # Carregar o modelo e o scaler
-        model = load_model(model_file, custom_objects={"mse": mse})
+        Returns:
+            tuple:
+                Um tuple contendo:
+                    - `model`: O modelo treinado carregado do MLflow.
+                    - `scaler`: O objeto scaler carregado do artefato.
+        """
+        # Busca pela run_id
+        experiment_name = f"LSTM_{ticker}"
+        experiment = mlflow.get_experiment_by_name(experiment_name)
+
+        if experiment is None:
+            raise ValueError(f"Experimento '{experiment_name}' não encontrado.")  # noqa
+
+        experiment_id = experiment.experiment_id
+
+        runs = mlflow.search_runs(
+            experiment_ids=[experiment_id],
+            order_by=["start_time desc"],
+            max_results=1
+        )
+        run_id = runs['run_id'].values[0]
+
+        # Carrega o modelo Keras do MLflow atraves da run
+        model_uri = f'runs:/{run_id}/model'
+        model = mlflow.tensorflow.load_model(model_uri)
+
+        # Realiza o download dos artefatos para carregar o scaler
+        artifact_path = mlflow.artifacts.download_artifacts(run_id=run_id)
+        artifact_path = Path(artifact_path)
+
+        # Busca pelo scaler
+        scaler_file = None
+        for file in os.listdir(artifact_path):
+            if file.startswith("scaler") and file.endswith(".pkl"):
+                scaler_file = artifact_path / file
+                break
+
+        # Erro caso não encontre o scaler
+        if not scaler_file:
+            raise FileNotFoundError("Arquivo de scaler não encontrado nos artefatos.")  # noqa
+
         scaler = joblib.load(scaler_file)
 
-        # Converte os dados de exemplo
-        recent_data = np.array(recent_data).reshape(1, 3, 1)
+        return model, scaler
 
-        # Escalar os dados de entrada usando o scaler
-        recent_data = scaler.transform(recent_data.reshape(-1, 1))  # Transformação antes da predição
-        recent_data = recent_data.reshape(1, 3, 1)  # Ajusta a forma após a transformação
+    @staticmethod
+    def get_recent_data(ticker: str = "AAPL") -> list[float]:
+        """_summary_
 
-        print(recent_data)
+        Args:
+            ticker (str, optional): Símbolo da ação para a qual o modelo e
+                o scaler devem ser carregados. O padrão é "AAPL".
 
-        # Gerar previsões para os dias especificados
+        Returns:
+        list[float]:
+            Lista contendo os preços de fechamento dos últimos 3 dias úteis.
+        """
+        data = yf.download(
+            ticker,
+            period="5d",
+            interval="1d"
+        )
+        return data[-3:]["Close"].values.flatten()
+
+    @classmethod
+    def predict_latest_model_run(
+        cls,
+        days_ahead: int,
+        ticker: str = "AAPL",
+    ) -> dict:
+        """_summary_
+
+        Args:
+            days_ahead (int): Numero de dias a serem preditos.
+            ticker (str, optional): _description_. Defaults to "AAPL".
+
+        Returns:
+            dict: Dicionario com as predições.
+        """
+
+        model, scaler = cls.get_model_and_scaler(ticker)
+        recent_data = cls.get_recent_data()
         predictions = {}
-        for day in days_ahead:
-            predicted_values = []
-            current_input = recent_data.copy()
+        print(recent_data)
+        for i in range(days_ahead):
 
-            for _ in range(day):
-                # Prever o próximo valor
-                next_prediction = model.predict(current_input)
-                predicted_values.append(next_prediction[0, 0])
+            # Transforma os dados de input
+            to_predict = np.array(recent_data[-3:]).reshape(-1, 1)
+            to_predict = scaler.fit_transform(to_predict)
+            to_predict = to_predict.reshape(1, 3, 1)
 
-                # Atualizar o input adicionando o novo valor
-                next_value_scaled = next_prediction[0, 0]
-                current_input = np.append(
-                    current_input[:, 1:, :],
-                    [[[next_value_scaled]]],
-                    axis=1
-                )
+            # Realiza a predição
+            prediction = model.predict(to_predict)
 
-            # Desescalar os valores previstos
-            predicted_values = np.array(predicted_values).reshape(-1, 1)
-            predicted_values = scaler.inverse_transform(predicted_values)
-            predictions[day] = predicted_values.flatten()
-
-        # Exibir as previsões
-        for days, predictions in predictions.items():
-            print(f"Previsões para {days} dias: {predictions}")
+            # Realiza a inversão do valor
+            prediction = scaler.inverse_transform(prediction)
+            predictions[f"Dia {i+1}"] = prediction[0, 0]
+            recent_data = np.append(recent_data, prediction)
 
         return predictions
 
@@ -296,12 +384,9 @@ class LSTMModel:
 if __name__ == '__main__':
 
     # Uso do modelo
-    # modelo = LSTMModel("AAPL", '2023-01-01', '2024-11-13')
-    # modelo.create_model()
+    modelo = LSTMModel("AAPL", '2023-01-01', '2024-11-13')
+    modelo.create_model()
 
-    predictions = LSTMModel.predict(
-        ticker="AAPL",
-        model_folder="2024_11_27_19_41_49",
-        days_ahead=[1, 5, 10],
-        recent_data=[100.0, 120.0, 140.0]  # yfinance
-    )
+    # Predição com modelo mais recente
+    predictions = LSTMModel.predict_latest_model_run(days_ahead=5)
+    print(predictions)
