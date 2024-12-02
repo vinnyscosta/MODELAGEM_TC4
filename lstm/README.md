@@ -1,4 +1,4 @@
-# LSTM Model for Stock Price Prediction
+# LSTM Model Para Predição de Preço de Ações
 
 Este projeto implementa um modelo **LSTM (Long Short-Term Memory)** para previsão de preços de ações. Ele utiliza dados financeiros do Yahoo Finance e realiza o treinamento, avaliação e salvamento do modelo, com suporte ao rastreamento de experimentos através do **MLflow**.  
 
