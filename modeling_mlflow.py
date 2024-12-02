@@ -257,7 +257,6 @@ class LSTMModel:
         ticker: str,
         model_folder: str,
         days_ahead: list[int],
-        recent_data: list
     ) -> dict:
 
         # Caminho do modelo
@@ -280,6 +279,9 @@ class LSTMModel:
         # Carregar o modelo e o scaler
         model = load_model(model_file, custom_objects={"mse": mse})
         scaler = joblib.load(scaler_file)
+
+        recent_data = yf.download(ticker, period="5d", interval="1d")
+        recent_data = recent_data[-3:]["Close"].values
 
         # Converte os dados de exemplo
         recent_data = np.array(recent_data).reshape(1, 3, 1)
@@ -327,9 +329,9 @@ if __name__ == '__main__':
     modelo = LSTMModel("AAPL", '2023-01-01', '2024-11-13')
     modelo.create_model()
 
-    predictions = LSTMModel.predict(
-        ticker="AAPL",
-        model_folder="2024_11_27_16_56_06",
-        days_ahead=[1, 5, 10],
-        recent_data=[100.0, 120.0, 140.0]
-    )
+    # predictions = LSTMModel.predict(
+    #     ticker="AAPL",
+    #     model_folder="2024_11_27_16_56_06",
+    #     days_ahead=[1, 5, 10],
+    #     recent_data=[100.0, 120.0, 140.0]
+    # )

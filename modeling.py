@@ -288,7 +288,7 @@ class LSTMModel:
 
         # Exibir as previsões
         for days, predictions in predictions.items():
-            print(f"Previsões para {days} dias: {predictions[-1]}")
+            print(f"Previsões para {days} dias: {predictions}")
 
         return predictions
 
@@ -301,7 +301,7 @@ if __name__ == '__main__':
 
     predictions = LSTMModel.predict(
         ticker="AAPL",
-        model_folder="2024_11_27_15_59_44",
+        model_folder="2024_11_27_19_41_49",
         days_ahead=[1, 5, 10],
-        recent_data=[100.0, 120.0, 140.0]
+        recent_data=[100.0, 120.0, 140.0]  # yfinance
     )
